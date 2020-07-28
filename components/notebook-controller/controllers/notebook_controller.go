@@ -163,7 +163,7 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			return ctrl.Result{}, err
 		}
 	} else if err != nil {
-		log.Error(err, "error getting Statefulset")
+		log.Error(err, "error getting Service")
 		return ctrl.Result{}, err
 	}
 	// Update the foundService object and write the result back if there are any changes
@@ -173,6 +173,39 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		if err != nil {
 			log.Error(err, "unable to update Service")
 			return ctrl.Result{}, err
+		}
+	}
+	// Reconcile OpenShift Route
+	if os.Getenv("USE_OPENSHIFT_ROUTE") == "true" {
+		route, err := generateRoute(instance)
+		if err := ctrl.SetControllerReference(instance, route, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		foundRoute := &unstructured.Unstructured{}
+		foundRoute.SetAPIVersion("route.openshift.io/v1")
+		foundRoute.SetKind("Route")
+		justCreated = false
+		err = r.Get(context.TODO(), types.NamespacedName{Name: route.GetName(), Namespace: instance.Namespace}, foundRoute)
+		if err != nil && apierrs.IsNotFound(err) {
+			log.Info("Creating Route", "namespace", instance.Namespace, "name", route.GetName())
+			err = r.Create(context.TODO(), route)
+			justCreated = true
+			if err != nil {
+				log.Error(err, "unable to create Route")
+				return ctrl.Result{}, err
+			}
+		} else if err != nil {
+			log.Error(err, "error getting Route")
+			return ctrl.Result{}, err
+		}
+
+		if !justCreated && reconcilehelper.CopyRoute(route, foundRoute) {
+			log.Info("Updating Route", "namespace", instance.Namespace, "name", route.GetName())
+			err = r.Update(context.TODO(), foundRoute)
+			if err != nil {
+				log.Error(err, "unable to update Route")
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -438,6 +471,44 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu
 
 }
 
+func generateRoute(instance *v1beta1.Notebook) (*unstructured.Unstructured, error) {
+	name := instance.Name
+	namespace := instance.Namespace
+
+	routeName := fmt.Sprintf("notebook-%s-%s", namespace, name)
+	routeHost := os.Getenv("OPENSHIFT_ROUTE_HOST")
+	if len(routeHost) == 0 {
+		routeHost = "kubeflow.apps-crc.testing"
+	}
+	routePath := fmt.Sprintf("/notebook/%s/%s", namespace, name)
+	serviceName := name
+	serviceTargetPort := fmt.Sprintf("http-%s", name)
+
+	route := &unstructured.Unstructured{}
+	route.SetAPIVersion("route.openshift.io/v1")
+	route.SetKind("Route")
+	route.SetName(routeName)
+	route.SetNamespace(namespace)
+
+	spec := map[string]interface{}{
+		"host": routeHost,
+		"path": routePath,
+		"port": map[string]interface{}{
+			"targetPort": serviceTargetPort,
+		},
+		"to": map[string]interface{}{
+			"kind": "Service",
+			"name": serviceName,
+		},
+		"timeout": "300s",
+	}
+	if err := unstructured.SetNestedMap(route.Object, spec, "spec"); err != nil {
+		return nil, fmt.Errorf("Set .spec error: %v", err)
+	}
+
+	return route, nil
+}
+
 func (r *NotebookReconciler) reconcileVirtualService(instance *v1beta1.Notebook) error {
 	log := r.Log.WithValues("notebook", instance.Namespace)
 	virtualService, err := generateVirtualService(instance)
@@ -489,7 +560,7 @@ func nbNameFromInvolvedObject(c client.Client, object *corev1.ObjectReference) (
 		pod := &corev1.Pod{}
 		err := c.Get(
 			context.TODO(),
-			types.NamespacedName {
+			types.NamespacedName{
 				Namespace: namespace,
 				Name:      name,
 			},
@@ -518,6 +589,15 @@ func (r *NotebookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1beta1.Notebook{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{})
+
+	// watch OpenShift Route
+	if os.Getenv("USE_OPENSHIFT_ROUTE") == "true" {
+		route := &unstructured.Unstructured{}
+		route.SetAPIVersion("route.openshift.io/v1")
+		route.SetKind("Route")
+		builder.Owns(route)
+	}
+
 	// watch Istio virtual service
 	if os.Getenv("USE_ISTIO") == "true" {
 		virtualService := &unstructured.Unstructured{}
