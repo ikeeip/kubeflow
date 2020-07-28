@@ -89,7 +89,7 @@ def post_notebook(namespace):
             notebook,
             r["pvc"].metadata.name,
             r["pvc"].metadata.name,
-            "/home/jovyan",
+            workspace_vol.get("path", defaults["workspaceVolume"]["value"]["mountPath"]["value"]),
         )
 
     # Add the Data Volumes

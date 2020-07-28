@@ -2,15 +2,18 @@ from flask import Flask, request, jsonify, send_from_directory
 from ..common.base_app import app as base
 from ..common import utils, api
 
-app = Flask(__name__)
-app.register_blueprint(base)
+FLASK_URL_PREFIX = '/jupyter'
+STATIC_FOLDER = './static'
+
+app = Flask(__name__, static_url_path=FLASK_URL_PREFIX)
+app.register_blueprint(base, url_prefix=FLASK_URL_PREFIX)
 logger = utils.create_logger(__name__)
 
 NOTEBOOK = "./kubeflow_jupyter/common/yaml/notebook.yaml"
 
 
 # POSTers
-@app.route("/api/namespaces/<namespace>/notebooks", methods=["POST"])
+@app.route(f"{FLASK_URL_PREFIX}/api/namespaces/<namespace>/notebooks", methods=["POST"])
 def post_notebook(namespace):
     body = request.get_json()
     defaults = utils.spawner_ui_config()
@@ -43,7 +46,7 @@ def post_notebook(namespace):
             notebook,
             workspace_vol["name"],
             workspace_vol["name"],
-            "/home/jovyan",
+            workspace_vol.get("path", defaults["workspaceVolume"]["value"]["mountPath"]["value"]),
         )
 
     # Add the Data Volumes
@@ -72,18 +75,14 @@ def post_notebook(namespace):
 
 
 # Since Angular is a SPA, we serve index.html every time
-@app.route("/")
+@app.route(f"{FLASK_URL_PREFIX}")
+@app.route(f"{FLASK_URL_PREFIX}/")
 def serve_root():
-    return send_from_directory("./static/", "index.html")
+    return send_from_directory(STATIC_FOLDER, "index.html")
 
-
-@app.route("/<path:path>", methods=["GET"])
-def static_proxy(path):
-    logger.info("Sending file '/static/{}' for path: {}".format(path, path))
-    return send_from_directory("./static/", path)
-
-
-@app.errorhandler(404)
-def page_not_found(e):
-    logger.info("Sending file 'index.html'")
-    return send_from_directory("./static/", "index.html")
+logger.info("==============")
+logger.info(f"{STATIC_FOLDER}")
+logger.info(f"{FLASK_URL_PREFIX}")
+logger.info("==============")
+logger.info(app.url_map)
+logger.info("==============")

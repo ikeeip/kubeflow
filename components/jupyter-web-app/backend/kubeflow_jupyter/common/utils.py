@@ -18,6 +18,7 @@ CONFIGS = [
 ]
 
 # The values of the headers to look for the User info
+USER = os.getenv("USERID", None)
 USER_HEADER = os.getenv("USERID_HEADER", "X-Goog-Authenticated-User-Email")
 USER_PREFIX = os.getenv("USERID_PREFIX", "accounts.google.com:")
 
@@ -49,6 +50,9 @@ logger = create_logger(__name__)
 
 # Utils
 def get_username_from_request():
+    if USER:
+        return USER
+
     if USER_HEADER not in request.headers:
         logger.debug("User header not present!")
         username = None
